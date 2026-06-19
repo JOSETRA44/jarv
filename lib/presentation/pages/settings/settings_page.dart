@@ -47,8 +47,8 @@ class SettingsPage extends ConsumerWidget {
               const _Divider(),
               _InfoRow(
                 label: 'Estado',
-                value: terminalState.sessionState.status.displayLabel,
-                valueColor: _statusColor(terminalState.sessionState.status),
+                value: terminalState.connectionStatus.displayLabel,
+                valueColor: _statusColor(terminalState.connectionStatus),
               ),
               if (terminalState.currentCwd.isNotEmpty) ...[
                 const _Divider(),
@@ -81,6 +81,21 @@ class SettingsPage extends ConsumerWidget {
                 type: t,
                 isSelected: isSelected,
                 isAvailable: isAvailable,
+                onTap: isAvailable && !isSelected && configState.config != null
+                    ? () async {
+                        final updated = configState.config!
+                            .copyWith(transportType: t);
+                        await ref.read(configProvider.notifier).save(updated);
+                        if (context.mounted) {
+                          await ref
+                              .read(terminalProvider.notifier)
+                              .disconnect();
+                          ref
+                              .read(terminalProvider.notifier)
+                              .connectWithConfig(updated);
+                        }
+                      }
+                    : null,
               );
             }).toList(),
           ),
@@ -159,13 +174,13 @@ class SettingsPage extends ConsumerWidget {
                     color: colorScheme.error,
                   ),
                 ),
-                subtitle: terminalState.sessionState.status.isConnected
+                subtitle: terminalState.connectionStatus.isConnected
                     ? Text(
                         'Conexión activa',
                         style: AppTextStyles.bodySmall,
                       )
                     : null,
-                onTap: terminalState.sessionState.status.isConnected
+                onTap: terminalState.connectionStatus.isConnected
                     ? () => _disconnect(context, ref)
                     : null,
               ),
@@ -324,11 +339,13 @@ class _TransportOption extends StatelessWidget {
   final TransportType type;
   final bool isSelected;
   final bool isAvailable;
+  final VoidCallback? onTap;
 
   const _TransportOption({
     required this.type,
     required this.isSelected,
     required this.isAvailable,
+    this.onTap,
   });
 
   @override
@@ -348,7 +365,9 @@ class _TransportOption extends StatelessWidget {
         break;
     }
 
-    return Padding(
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
         children: [
@@ -392,6 +411,7 @@ class _TransportOption extends StatelessWidget {
               color: colorScheme.primary,
             ),
         ],
+      ),
       ),
     );
   }

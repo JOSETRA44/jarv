@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' as http;
 import '../../providers/config_provider.dart';
 import '../../providers/terminal_provider.dart';
 import '../../../core/theme/app_colors.dart';
@@ -58,19 +60,30 @@ class _SetupPageState extends ConsumerState<SetupPage> {
     );
 
     try {
-      final connectUc = ref.read(connectUsecaseProvider);
-      await connectUc.authenticate(config);
+      // Validate credentials with a plain HTTP login (no WebSocket yet).
+      // The terminal page will open the WebSocket after navigation.
+      final loginUrl = Uri.parse('${config.httpUrl}${AppConstants.loginPath}');
+      final response = await http
+          .post(
+            loginUrl,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'password': config.password}),
+          )
+          .timeout(AppConstants.requestTimeout);
+
+      if (response.statusCode == 401) {
+        throw Exception('Contraseña incorrecta');
+      } else if (response.statusCode != 200) {
+        throw Exception('Error del servidor: ${response.statusCode}');
+      }
 
       // Save config
       await ref.read(configProvider.notifier).save(config);
 
       if (!mounted) return;
 
-      // Navigate to terminal and connect
+      // Navigate — terminal page auto-connects via WebSocket
       context.go('/terminal');
-
-      // Connect WS
-      await ref.read(terminalProvider.notifier).connectWithConfig(config);
     } catch (e) {
       setState(() {
         _errorMessage = e.toString().replaceFirst('Exception: ', '');

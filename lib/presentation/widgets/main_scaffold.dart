@@ -63,7 +63,7 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
                 clipBehavior: Clip.none,
                 children: [
                   const Icon(Icons.terminal_rounded),
-                  if (terminalState.sessionState.status.isConnected)
+                  if (terminalState.connectionStatus.isConnected)
                     Positioned(
                       right: -2,
                       top: -2,
@@ -82,7 +82,7 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
                 clipBehavior: Clip.none,
                 children: [
                   const Icon(Icons.terminal_rounded),
-                  if (terminalState.sessionState.status.isConnected)
+                  if (terminalState.connectionStatus.isConnected)
                     Positioned(
                       right: -2,
                       top: -2,
@@ -101,12 +101,12 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
             ),
             NavigationDestination(
               icon: Badge(
-                isLabelVisible: terminalState.messages
-                        .where((m) => m.type.name == 'command')
-                        .isNotEmpty,
+                isLabelVisible: terminalState.blocks
+                    .where((b) => b.type.name == 'command' && b.isComplete)
+                    .isNotEmpty,
                 label: Text(
-                  terminalState.messages
-                      .where((m) => m.type.name == 'command')
+                  terminalState.blocks
+                      .where((b) => b.type.name == 'command' && b.isComplete)
                       .length
                       .toString(),
                   style: AppTextStyles.labelSmall.copyWith(fontSize: 9),

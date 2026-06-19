@@ -52,7 +52,7 @@ class _ConnectionStatusBarState extends ConsumerState<ConnectionStatusBar>
   @override
   Widget build(BuildContext context) {
     final terminalState = ref.watch(terminalProvider);
-    final status = terminalState.sessionState.status;
+    final status = terminalState.connectionStatus;
     final cwd = terminalState.currentCwd;
     final colorScheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
