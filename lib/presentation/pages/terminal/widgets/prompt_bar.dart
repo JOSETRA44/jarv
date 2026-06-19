@@ -54,28 +54,27 @@ class _PromptBarState extends ConsumerState<PromptBar> {
 
   void _submit() {
     final text = _ctrl.text;
-    if (text.isEmpty) return;
     final notifier = ref.read(terminalProvider.notifier);
     final isWaiting = ref.read(terminalProvider).isWaitingForPrompt;
 
     if (isWaiting) {
-      // A process (REPL/TUI/interactive) is running — route raw input to the PTY.
-      // Don't trim: whitespace is significant inside many REPLs and interactive tools.
+      // Process mode: always send to PTY, even empty text.
+      // Empty Enter = \r alone, which navigates menus, confirms prompts, etc.
       notifier.sendRawInput('$text\r');
-      // Don't add to shell history — these aren't shell commands
-    } else {
-      // Shell is ready — create a command block and dispatch to the shell.
-      final trimmed = text.trim();
-      if (trimmed.isEmpty) {
-        _ctrl.clear();
-        return;
-      }
-      notifier.sendCommand(trimmed);
-      _history.insert(0, trimmed);
-      if (_history.length > 100) _history.removeLast();
-      _historyIdx = -1;
+      _ctrl.clear();
+      _focus.requestFocus();
+      return;
     }
 
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) {
+      _ctrl.clear();
+      return;
+    }
+    notifier.sendCommand(trimmed);
+    _history.insert(0, trimmed);
+    if (_history.length > 100) _history.removeLast();
+    _historyIdx = -1;
     _ctrl.clear();
     _focus.requestFocus();
   }
@@ -196,8 +195,18 @@ class _PromptBarState extends ConsumerState<PromptBar> {
 
               const SizedBox(width: 8),
 
-              // Process mode: Ctrl+C to interrupt + send to process
+              // Process mode: ESC + Ctrl+C to interrupt, Enter to send
               if (isWaiting) ...[
+                // ESC — cancel/pause (e.g. gemini uses "esc to cancel")
+                _TextBtn(
+                  label: 'ESC',
+                  color: processColor,
+                  tooltip: 'Enviar ESC al proceso',
+                  onTap: () =>
+                      ref.read(terminalProvider.notifier).sendSignal('\x1b'),
+                ),
+                const SizedBox(width: 4),
+                // Ctrl+C — interrupt / SIGINT
                 _IconBtn(
                   icon: Icons.stop_rounded,
                   color: AppColors.statusError,
@@ -283,6 +292,50 @@ class _QuickCommands extends StatelessWidget {
               ),
             );
           }).toList(),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Text button helper (for short labels like "ESC") ─────────────────────────
+
+class _TextBtn extends StatelessWidget {
+  final String label;
+  final Color color;
+  final String tooltip;
+  final VoidCallback? onTap;
+
+  const _TextBtn({
+    required this.label,
+    required this.color,
+    required this.tooltip,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(4),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+          decoration: BoxDecoration(
+            border: Border.all(color: color.withOpacity(0.5), width: 1),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              color: color,
+              fontFamily: 'JetBrains Mono',
+              letterSpacing: 0.5,
+            ),
+          ),
         ),
       ),
     );

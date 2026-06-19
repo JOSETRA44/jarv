@@ -1,21 +1,81 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:xterm/xterm.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_text_styles.dart';
 import '../../../../domain/entities/terminal_block.dart';
+import '../../../providers/terminal_provider.dart';
 
-class TerminalBlockWidget extends StatelessWidget {
+class TerminalBlockWidget extends ConsumerWidget {
   final TerminalBlock block;
 
   const TerminalBlockWidget({super.key, required this.block});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // While a command is running, render a live xterm terminal view.
+    // This handles VT100 cursor movement, spinner overwrites, and full-screen TUI apps.
+    if (block.isRunning && block.type == TerminalBlockType.command) {
+      final terminal =
+          ref.read(terminalProvider.notifier).getTerminal(block.sessionId);
+      if (terminal != null) {
+        return _LiveCommandBlock(block: block, terminal: terminal);
+      }
+    }
+
     return switch (block.type) {
       TerminalBlockType.motd => _MotdContent(block: block),
       TerminalBlockType.command => _CommandBlock(block: block),
       TerminalBlockType.system => _SystemBlock(block: block),
     };
+  }
+}
+
+// ── Live terminal view (running command) ──────────────────────────────────────
+
+class _LiveCommandBlock extends StatelessWidget {
+  final TerminalBlock block;
+  final Terminal terminal;
+
+  const _LiveCommandBlock({required this.block, required this.terminal});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    const accentColor = AppColors.statusConnecting;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF060A10) : AppColors.lightCard,
+        borderRadius: BorderRadius.circular(8),
+        border: const Border(
+          left: BorderSide(color: accentColor, width: 3),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _BlockHeader(
+            block: block,
+            accentColor: accentColor,
+            isDark: isDark,
+            cs: Theme.of(context).colorScheme,
+          ),
+          // autoResize=true (default): TerminalView reports size changes to
+          // terminal.onResize, which we forward to the backend PTY via resizePty().
+          SizedBox(
+            height: 340,
+            child: TerminalView(
+              terminal,
+              autofocus: false,
+              readOnly: true,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

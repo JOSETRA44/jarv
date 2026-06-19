@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
+import 'package:xterm/xterm.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/transport/i_transport_strategy.dart';
 import '../../core/transport/transport_factory.dart';
@@ -63,6 +64,9 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
   Timer? _autoRetryTimer;
   ConnectionConfig? _config;
 
+  // One xterm Terminal per session — handles all VT100 rendering for running blocks.
+  final Map<String, Terminal> _terminals = {};
+
   TerminalNotifier(this._transport) : super(const TerminalState()) {
     _subscribe();
   }
@@ -94,8 +98,12 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
         _onSessionCreated(data);
       case 'session_closed':
         _onSessionClosed(data);
+      case 'raw':
+        _onRaw(data);
       case 'output':
         _onOutput(data);
+      case 'clear_output':
+        _onClearOutput(data);
       case 'prompt':
         _onPrompt(data);
       case 'error':
@@ -150,6 +158,7 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
 
   void _onSessionClosed(Map<String, dynamic> data) {
     final id = data['id'] as String? ?? '';
+    _terminals.remove(id);
     final remaining = state.sessions.where((s) => s.id != id).toList();
     String newActive = state.activeSessionId;
     if (newActive == id && remaining.isNotEmpty) {
@@ -160,20 +169,64 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
     state = state.copyWith(sessions: remaining, activeSessionId: newActive);
   }
 
+  // ── xterm Terminal management ─────────────────────────────────────────────
+
+  Terminal _getOrCreateTerminal(String sessionId) {
+    if (_terminals.containsKey(sessionId)) return _terminals[sessionId]!;
+    final t = Terminal(maxLines: 5000);
+    // onResize fires when TerminalView (autoResize=true) resizes the terminal.
+    // Forward the new dimensions to the backend PTY.
+    t.onResize = (cols, rows, _, __) => resizePty(cols, rows, sessionId: sessionId);
+    _terminals[sessionId] = t;
+    return t;
+  }
+
+  /// Expose the Terminal for a session so widgets can bind TerminalView to it.
+  Terminal? getTerminal(String sessionId) => _terminals[sessionId];
+
+  void _onRaw(Map<String, dynamic> data) {
+    final rawData = data['data'] as String? ?? '';
+    final sessionId = data['session'] as String? ?? state.activeSessionId;
+    if (rawData.isEmpty) return;
+    _getOrCreateTerminal(sessionId).write(rawData);
+  }
+
   void _onOutput(Map<String, dynamic> data) {
     final text = data['data'] as String? ?? '';
+    // replace > 0: remove that many trailing lines before appending.
+    // This handles \r (carriage-return) overwrites from spinner/progress-bar
+    // output — the backend tells us how many lines were overwritten.
+    final replaceLast = (data['replace'] as int?) ?? 0;
     final sessionId = data['session'] as String? ?? state.activeSessionId;
     if (text.isEmpty) return;
 
-    final lines = text.split('\n').where((l) => l.isNotEmpty).toList();
-    if (lines.isEmpty) return;
+    final incoming = text.split('\n').where((l) => l.isNotEmpty).toList();
+    if (incoming.isEmpty) return;
 
     final blocks = List<TerminalBlock>.from(state.blocks);
     final idx = _lastRunningBlock(blocks, sessionId);
     if (idx >= 0) {
+      var existing = List<String>.from(blocks[idx].outputLines);
+      if (replaceLast > 0 && existing.isNotEmpty) {
+        final trim = replaceLast.clamp(0, existing.length);
+        existing = existing.sublist(0, existing.length - trim);
+      }
       blocks[idx] = blocks[idx].copyWith(
-        outputLines: [...blocks[idx].outputLines, ...lines],
+        outputLines: [...existing, ...incoming],
       );
+      state = state.copyWith(blocks: blocks);
+    }
+  }
+
+  // Emitted when the TUI sends a screen-clear sequence (\x1b[2J etc.).
+  // Wipe the running block's output so the next redraw starts fresh instead
+  // of visually stacking over old lines.
+  void _onClearOutput(Map<String, dynamic> data) {
+    final sessionId = data['session'] as String? ?? state.activeSessionId;
+    final blocks = List<TerminalBlock>.from(state.blocks);
+    final idx = _lastRunningBlock(blocks, sessionId);
+    if (idx >= 0) {
+      blocks[idx] = blocks[idx].copyWith(outputLines: []);
       state = state.copyWith(blocks: blocks);
     }
   }
@@ -255,6 +308,10 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
     if (!state.connectionStatus.isConnected) return;
     final trimmed = text.trim();
     if (trimmed.isEmpty) return;
+
+    // Reset (or create) the xterm terminal for this session.
+    // \x1bc = RIS (Reset to Initial State) — clears screen and history.
+    _getOrCreateTerminal(state.activeSessionId).write('\x1bc');
 
     final block = TerminalBlock.command(
       command: trimmed,
@@ -355,6 +412,7 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
 
   @override
   void dispose() {
+    _terminals.clear();
     _eventSub?.cancel();
     _statusSub?.cancel();
     _autoRetryTimer?.cancel();
