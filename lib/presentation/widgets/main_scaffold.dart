@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../pages/terminal/terminal_page.dart';
 import '../pages/history/history_page.dart';
 import '../pages/settings/settings_page.dart';
+import '../pages/poltergeist/poltergeist_page.dart';
 import '../providers/terminal_provider.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
@@ -26,6 +27,7 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
     TerminalPage(),
     HistoryPage(),
     SettingsPage(),
+    PoltergeistPage(),
   ];
 
   @override
@@ -121,6 +123,11 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
               icon: Icon(Icons.settings_outlined),
               selectedIcon: Icon(Icons.settings_rounded),
               label: 'Ajustes',
+            ),
+            const NavigationDestination(
+              icon: Icon(Icons.spatial_audio_off_rounded),
+              selectedIcon: Icon(Icons.spatial_audio_rounded),
+              label: 'Control',
             ),
           ],
         ),

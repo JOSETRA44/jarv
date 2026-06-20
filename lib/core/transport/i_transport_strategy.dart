@@ -11,5 +11,10 @@ abstract class ITransportStrategy {
   Future<void> connect(ConnectionConfig config, String token);
   Future<void> send(Map<String, dynamic> message);
   Future<void> disconnect();
+
+  /// Force an immediate reconnect attempt (resets backoff). No-op if already
+  /// connected or if reconnection is disabled. Used on app resume.
+  void reconnectNow();
+
   void dispose();
 }

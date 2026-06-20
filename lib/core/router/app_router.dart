@@ -29,6 +29,10 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/settings',
         builder: (context, state) => const MainScaffold(initialIndex: 2),
       ),
+      GoRoute(
+        path: '/control',
+        builder: (context, state) => const MainScaffold(initialIndex: 3),
+      ),
     ],
   );
 });

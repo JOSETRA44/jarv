@@ -145,6 +145,17 @@ class WebSocketTransport implements ITransportStrategy {
     _statusController.add('disconnected');
   }
 
+  @override
+  void reconnectNow() {
+    // Only act when we want to be connected but currently aren't (e.g. the OS
+    // silently killed the socket in the background). Reset backoff for an
+    // instant attempt instead of waiting out the exponential delay.
+    if (!_shouldReconnect || _connected) return;
+    _reconnectTimer?.cancel();
+    _attempts = 0;
+    _doConnect();
+  }
+
   void _cleanup() {
     _pingTimer?.cancel();
     _pingTimer = null;

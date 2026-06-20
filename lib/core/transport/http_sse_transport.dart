@@ -131,6 +131,14 @@ class HttpSseTransport implements ITransportStrategy {
   }
 
   @override
+  void reconnectNow() {
+    if (!_shouldReconnect || _connected) return;
+    _reconnectTimer?.cancel();
+    _attempts = 0;
+    _doConnect();
+  }
+
+  @override
   Future<void> disconnect() async {
     _shouldReconnect = false;
     _reconnectTimer?.cancel();

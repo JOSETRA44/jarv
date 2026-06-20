@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 import '../../providers/config_provider.dart';
 import '../../providers/terminal_provider.dart';
 import '../../providers/theme_provider.dart';
+import '../../providers/notification_settings_provider.dart';
+import '../../../infrastructure/notifications/local_notification_service.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_text_styles.dart';
 import '../../../core/constants/app_constants.dart';
@@ -170,6 +172,14 @@ class SettingsPage extends ConsumerWidget {
                 ),
               ),
             ],
+          ),
+
+          const SizedBox(height: 24),
+
+          // Notifications section
+          _SectionHeader(title: 'Notificaciones'),
+          _SettingsCard(
+            children: [const _NotificationsToggle()],
           ),
 
           const SizedBox(height: 24),
@@ -442,6 +452,54 @@ class _TransportOption extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _NotificationsToggle extends ConsumerWidget {
+  const _NotificationsToggle();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final enabled = ref.watch(notificationsEnabledProvider);
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return SwitchListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+      secondary: Icon(
+        Icons.notifications_active_rounded,
+        color: colorScheme.primary,
+        size: 20,
+      ),
+      title: Text(
+        'Alertas del sistema',
+        style: AppTextStyles.bodyMedium.copyWith(color: colorScheme.onSurface),
+      ),
+      subtitle: Text(
+        'Avisa de desconexión, comandos largos y eventos cuando la app está en segundo plano',
+        style: AppTextStyles.bodySmall,
+      ),
+      value: enabled,
+      onChanged: (value) async {
+        if (value) {
+          final granted =
+              await LocalNotificationService.instance.requestPermission();
+          if (!granted) {
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    'Permiso de notificaciones denegado',
+                    style: AppTextStyles.bodySmall,
+                  ),
+                ),
+              );
+            }
+            return; // keep toggle off
+          }
+        }
+        await ref.read(notificationsEnabledProvider.notifier).setEnabled(value);
+      },
     );
   }
 }

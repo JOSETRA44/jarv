@@ -68,6 +68,11 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
   // One xterm Terminal per session — handles all VT100 rendering for running blocks.
   final Map<String, Terminal> _terminals = {};
 
+  // Re-emits every server event so the notification coordinator can react to
+  // transient events (prompt durationMs, session_exit) without coupling.
+  final _serverEvents = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get serverEvents => _serverEvents.stream;
+
   TerminalNotifier(this._transport) : super(const TerminalState()) {
     _subscribe();
   }
@@ -92,11 +97,13 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
   // ── Protocol event dispatch ───────────────────────────────────────────────
 
   void _handleEvent(Map<String, dynamic> data) {
+    if (!_serverEvents.isClosed) _serverEvents.add(data);
     switch (data['type'] as String?) {
       case 'authenticated':
         _onAuthenticated(data);
       case 'session_created':
         _onSessionCreated(data);
+      case 'session_exit':
       case 'session_closed':
         _onSessionClosed(data);
       case 'raw':
@@ -114,6 +121,7 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
 
   void _onAuthenticated(Map<String, dynamic> data) {
     final connId = data['connectionId'] as String? ?? '';
+    final reattached = data['reattached'] as bool? ?? false;
     final rawSessions = (data['sessions'] as List<dynamic>? ?? [])
         .whereType<Map<String, dynamic>>()
         .toList();
@@ -124,28 +132,48 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
           isActive: false,
         )).toList();
 
-    final activeId = tabs.isNotEmpty ? tabs.first.id : '';
-    final activeCwd = tabs.isNotEmpty ? tabs.first.cwd : '';
+    // On re-attach, keep the previously active tab if the server still has it.
+    final keepActive =
+        tabs.any((t) => t.id == state.activeSessionId) && reattached
+            ? state.activeSessionId
+            : (tabs.isNotEmpty ? tabs.first.id : '');
+    final activeCwd = tabs
+            .where((t) => t.id == keepActive)
+            .map((t) => t.cwd)
+            .firstOrNull ??
+        (tabs.isNotEmpty ? tabs.first.cwd : '');
 
-    final updatedTabs = tabs
-        .map((t) => t.copyWith(isActive: t.id == activeId))
-        .toList();
+    final updatedTabs =
+        tabs.map((t) => t.copyWith(isActive: t.id == keepActive)).toList();
 
-    final motd = TerminalBlock.motd(
-      cwd: activeCwd,
-      connectionId: connId,
-      sessionId: activeId,
-    );
-
-    final trimmedBlocks = _trim([...state.blocks, motd]);
-
-    state = state.copyWith(
-      connectionStatus: SessionStatus.connected,
-      sessions: updatedTabs,
-      activeSessionId: activeId,
-      currentCwd: activeCwd,
-      blocks: trimmedBlocks,
-    );
+    if (reattached) {
+      // Reset each xterm so the server's buffer replay rebuilds it cleanly
+      // (same Terminal instance → bound TerminalViews keep working).
+      // \x1bc = RIS (reset to initial state): clears screen + scrollback.
+      for (final t in tabs) {
+        _terminals[t.id]?.write('\x1bc');
+      }
+      state = state.copyWith(
+        connectionStatus: SessionStatus.connected,
+        sessions: updatedTabs,
+        activeSessionId: keepActive,
+        currentCwd: activeCwd,
+      );
+      _addSystemBlock('Reconectado — sesiones restauradas');
+    } else {
+      final motd = TerminalBlock.motd(
+        cwd: activeCwd,
+        connectionId: connId,
+        sessionId: keepActive,
+      );
+      state = state.copyWith(
+        connectionStatus: SessionStatus.connected,
+        sessions: updatedTabs,
+        activeSessionId: keepActive,
+        currentCwd: activeCwd,
+        blocks: _trim([...state.blocks, motd]),
+      );
+    }
     _autoRetryTimer?.cancel();
   }
 
@@ -298,6 +326,19 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
     }
   }
 
+  /// Called when the app returns to the foreground. The server keeps sessions
+  /// alive during a short grace period, so an immediate reconnect re-attaches
+  /// the same tabs (and replays output buffered while backgrounded).
+  void onResume() {
+    final cfg = _config;
+    if (cfg == null) return;
+    if (state.connectionStatus.isConnected) {
+      _transport.reconnectNow();
+    } else if (!state.connectionStatus.isConnecting) {
+      connectWithConfig(cfg);
+    }
+  }
+
   Future<void> disconnect() async {
     _autoRetryTimer?.cancel();
     await _transport.disconnect();
@@ -417,6 +458,7 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
     _eventSub?.cancel();
     _statusSub?.cancel();
     _autoRetryTimer?.cancel();
+    _serverEvents.close();
     _transport.dispose();
     super.dispose();
   }

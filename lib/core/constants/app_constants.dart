@@ -13,6 +13,7 @@ class AppConstants {
   // API paths
   static const String loginPath = '/api/auth/login';
   static const String wsMobilePath = '/ws/mobile';
+  static const String wsPoltergeistPath = '/ws/poltergeist';
 
   // Timeouts
   static const Duration connectTimeout = Duration(seconds: 10);
