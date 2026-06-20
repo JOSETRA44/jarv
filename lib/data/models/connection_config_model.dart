@@ -4,6 +4,7 @@ class ConnectionConfigModel extends ConnectionConfig {
   const ConnectionConfigModel({
     required super.baseUrl,
     required super.password,
+    super.cloudflareUrl = 'https://jarvis.unicali.app',
     super.operatorId,
     super.transportType,
   });
@@ -11,6 +12,7 @@ class ConnectionConfigModel extends ConnectionConfig {
   factory ConnectionConfigModel.fromEntity(ConnectionConfig entity) {
     return ConnectionConfigModel(
       baseUrl: entity.baseUrl,
+      cloudflareUrl: entity.cloudflareUrl,
       password: entity.password,
       operatorId: entity.operatorId,
       transportType: entity.transportType,
@@ -20,6 +22,7 @@ class ConnectionConfigModel extends ConnectionConfig {
   Map<String, dynamic> toJson() {
     return {
       'baseUrl': baseUrl,
+      'cloudflareUrl': cloudflareUrl,
       'password': password,
       'operatorId': operatorId,
       'transportType': transportType.name,
@@ -29,6 +32,8 @@ class ConnectionConfigModel extends ConnectionConfig {
   factory ConnectionConfigModel.fromJson(Map<String, dynamic> json) {
     return ConnectionConfigModel(
       baseUrl: json['baseUrl'] as String? ?? '',
+      cloudflareUrl: json['cloudflareUrl'] as String? ??
+          'https://jarvis.unicali.app',
       password: json['password'] as String? ?? '',
       operatorId: json['operatorId'] as String?,
       transportType: TransportType.values.firstWhere(

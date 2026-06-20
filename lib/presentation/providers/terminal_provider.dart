@@ -10,6 +10,7 @@ import '../../domain/entities/connection_config.dart';
 import '../../domain/entities/session_state.dart';
 import '../../domain/entities/terminal_block.dart';
 import '../../domain/entities/session_tab.dart';
+import '../../core/services/device_id_service.dart';
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -424,12 +425,13 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
 // ── Auth helper (standalone HTTP call) ───────────────────────────────────────
 
 Future<String> _authenticate(ConnectionConfig config) async {
+  final deviceId = await DeviceIdService.get();
   final url = Uri.parse('${config.httpUrl}${AppConstants.loginPath}');
   final response = await http
       .post(
         url,
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'password': config.password}),
+        body: jsonEncode({'password': config.password, 'deviceId': deviceId}),
       )
       .timeout(AppConstants.requestTimeout);
 
@@ -439,7 +441,9 @@ Future<String> _authenticate(ConnectionConfig config) async {
     if (token == null || token.isEmpty) throw Exception('Token vacío del servidor');
     return token;
   } else if (response.statusCode == 401) {
-    throw Exception('Contraseña incorrecta');
+    throw Exception('Credenciales incorrectas o dispositivo no autorizado');
+  } else if (response.statusCode == 429) {
+    throw Exception('Demasiados intentos. Espera 15 minutos.');
   }
   throw Exception('Error del servidor: ${response.statusCode}');
 }

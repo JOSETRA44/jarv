@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../providers/config_provider.dart';
@@ -7,6 +8,7 @@ import '../../providers/theme_provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_text_styles.dart';
 import '../../../core/constants/app_constants.dart';
+import '../../../core/services/device_id_service.dart';
 import '../../../domain/entities/connection_config.dart';
 import '../../../domain/entities/session_state.dart';
 
@@ -40,10 +42,18 @@ class SettingsPage extends ConsumerWidget {
           _SettingsCard(
             children: [
               _InfoRow(
-                label: 'URL Backend',
-                value: configState.config?.baseUrl ?? 'No configurado',
+                label: 'URL activa',
+                value: configState.config?.httpUrl ?? 'No configurado',
                 mono: true,
               ),
+              if (configState.config?.transportType == TransportType.cloudflare) ...[
+                const _Divider(),
+                _InfoRow(
+                  label: 'Cloudflare URL',
+                  value: configState.config!.cloudflareUrl,
+                  mono: true,
+                ),
+              ],
               const _Divider(),
               _InfoRow(
                 label: 'Estado',
@@ -66,7 +76,7 @@ class SettingsPage extends ConsumerWidget {
           OutlinedButton.icon(
             onPressed: () => context.go('/setup'),
             icon: const Icon(Icons.edit_outlined, size: 18),
-            label: const Text('Editar conexión'),
+            label: const Text('Editar conexión LAN'),
           ),
 
           const SizedBox(height: 24),
@@ -77,10 +87,17 @@ class SettingsPage extends ConsumerWidget {
             children: TransportType.values.map((t) {
               final isSelected = configState.config?.transportType == t;
               final isAvailable = t.isAvailable;
+              final subtitle = t == TransportType.cloudflare
+                  ? (configState.config?.cloudflareUrl ??
+                      AppConstants.cloudflareBaseUrl)
+                  : t == TransportType.direct
+                      ? (configState.config?.baseUrl ?? 'LAN local')
+                      : null;
               return _TransportOption(
                 type: t,
                 isSelected: isSelected,
                 isAvailable: isAvailable,
+                subtitle: subtitle,
                 onTap: isAvailable && !isSelected && configState.config != null
                     ? () async {
                         final updated = configState.config!
@@ -153,6 +170,14 @@ class SettingsPage extends ConsumerWidget {
                 ),
               ),
             ],
+          ),
+
+          const SizedBox(height: 24),
+
+          // Security section
+          _SectionHeader(title: 'Seguridad'),
+          _SettingsCard(
+            children: [const _DeviceIdRow()],
           ),
 
           const SizedBox(height: 24),
@@ -339,12 +364,14 @@ class _TransportOption extends StatelessWidget {
   final TransportType type;
   final bool isSelected;
   final bool isAvailable;
+  final String? subtitle;
   final VoidCallback? onTap;
 
   const _TransportOption({
     required this.type,
     required this.isSelected,
     required this.isAvailable,
+    this.subtitle,
     this.onTap,
   });
 
@@ -352,66 +379,134 @@ class _TransportOption extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
 
-    IconData icon;
-    switch (type) {
-      case TransportType.direct:
-        icon = Icons.wifi_rounded;
-        break;
-      case TransportType.telegram:
-        icon = Icons.send_rounded;
-        break;
-      case TransportType.cloudflare:
-        icon = Icons.cloud_queue_rounded;
-        break;
-    }
+    final icon = switch (type) {
+      TransportType.direct     => Icons.wifi_rounded,
+      TransportType.telegram   => Icons.send_rounded,
+      TransportType.cloudflare => Icons.cloud_done_rounded,
+    };
+
+    final nameColor = isAvailable
+        ? colorScheme.onSurface
+        : colorScheme.onSurface.withOpacity(0.3);
+    final iconColor = isAvailable
+        ? (isSelected ? colorScheme.primary : colorScheme.onSurface.withOpacity(0.5))
+        : colorScheme.onSurface.withOpacity(0.2);
 
     return InkWell(
       onTap: onTap,
       child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: iconColor),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    type.displayName,
+                    style: AppTextStyles.bodyMedium.copyWith(color: nameColor),
+                  ),
+                  if (subtitle != null && isAvailable)
+                    Text(
+                      subtitle!,
+                      style: AppTextStyles.monoTiny.copyWith(
+                        color: isSelected
+                            ? colorScheme.primary.withOpacity(0.7)
+                            : colorScheme.onSurface.withOpacity(0.35),
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                    ),
+                ],
+              ),
+            ),
+            if (!isAvailable)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: colorScheme.onSurface.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  'Próximamente',
+                  style: AppTextStyles.labelSmall.copyWith(
+                    color: colorScheme.onSurface.withOpacity(0.3),
+                    fontSize: 10,
+                  ),
+                ),
+              )
+            else if (isSelected)
+              Icon(Icons.check_circle_rounded, size: 18, color: colorScheme.primary),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DeviceIdRow extends StatefulWidget {
+  const _DeviceIdRow();
+
+  @override
+  State<_DeviceIdRow> createState() => _DeviceIdRowState();
+}
+
+class _DeviceIdRowState extends State<_DeviceIdRow> {
+  String _id = '...';
+
+  @override
+  void initState() {
+    super.initState();
+    DeviceIdService.get().then((id) {
+      if (mounted) setState(() => _id = id);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [
-          Icon(
-            icon,
-            size: 18,
-            color: isAvailable
-                ? (isSelected ? colorScheme.primary : colorScheme.onSurface.withOpacity(0.5))
-                : colorScheme.onSurface.withOpacity(0.2),
+          Text(
+            'Device ID',
+            style: AppTextStyles.bodyMedium.copyWith(
+              color: colorScheme.onSurface.withOpacity(0.6),
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
-              type.displayName,
-              style: AppTextStyles.bodyMedium.copyWith(
-                color: isAvailable
-                    ? colorScheme.onSurface
-                    : colorScheme.onSurface.withOpacity(0.3),
+              _id,
+              style: AppTextStyles.monoSmall.copyWith(
+                color: colorScheme.onSurface,
               ),
+              textAlign: TextAlign.right,
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
             ),
           ),
-          if (!isAvailable)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: colorScheme.onSurface.withOpacity(0.06),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                'Próximamente',
-                style: AppTextStyles.labelSmall.copyWith(
-                  color: colorScheme.onSurface.withOpacity(0.3),
-                  fontSize: 10,
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: () {
+              Clipboard.setData(ClipboardData(text: _id));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Device ID copiado'),
+                  duration: Duration(seconds: 2),
                 ),
-              ),
-            )
-          else if (isSelected)
-            Icon(
-              Icons.check_circle_rounded,
-              size: 18,
-              color: colorScheme.primary,
+              );
+            },
+            child: Icon(
+              Icons.copy_rounded,
+              size: 16,
+              color: colorScheme.onSurface.withOpacity(0.4),
             ),
+          ),
         ],
-      ),
       ),
     );
   }

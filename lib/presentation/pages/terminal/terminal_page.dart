@@ -8,8 +8,8 @@ import '../../../core/theme/app_text_styles.dart';
 import '../../../domain/entities/session_state.dart';
 import 'widgets/connection_status_bar.dart';
 import 'widgets/session_tab_bar.dart';
-import 'widgets/terminal_block_widget.dart';
-import 'widgets/prompt_bar.dart';
+import 'widgets/terminal_session_view.dart';
+import 'widgets/helper_bar.dart';
 
 class TerminalPage extends ConsumerStatefulWidget {
   const TerminalPage({super.key});
@@ -19,8 +19,6 @@ class TerminalPage extends ConsumerStatefulWidget {
 }
 
 class _TerminalPageState extends ConsumerState<TerminalPage> {
-  final _scrollCtrl = ScrollController();
-
   @override
   void initState() {
     super.initState();
@@ -38,34 +36,10 @@ class _TerminalPageState extends ConsumerState<TerminalPage> {
   }
 
   @override
-  void dispose() {
-    _scrollCtrl.dispose();
-    super.dispose();
-  }
-
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollCtrl.hasClients) {
-        _scrollCtrl.animateTo(
-          _scrollCtrl.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOut,
-        );
-      }
-    });
-  }
-
-  @override
   Widget build(BuildContext context) {
     final ts = ref.watch(terminalProvider);
     final configState = ref.watch(configProvider);
     final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    // Scroll to bottom when blocks are appended
-    ref.listen(
-      terminalProvider.select((s) => s.blocks.length),
-      (prev, next) { if (next > (prev ?? 0)) _scrollToBottom(); },
-    );
 
     // Auto-connect when config arrives
     ref.listen(configProvider.select((s) => s.config), (prev, next) {
@@ -74,33 +48,31 @@ class _TerminalPageState extends ConsumerState<TerminalPage> {
       }
     });
 
+    final isConnected = ts.connectionStatus == SessionStatus.connected;
+    final hasSession = ts.activeSessionId.isNotEmpty;
+
     return Scaffold(
       backgroundColor:
           isDark ? AppColors.darkBackground : AppColors.lightBackground,
       body: SafeArea(
+        bottom: false,
         child: Column(
           children: [
             const ConnectionStatusBar(),
-            // Session tabs (hidden when only 1 session)
-            if (ts.sessions.length > 1) const SessionTabBar(),
-            // Block list
+            // Session tabs — always visible when connected
+            if (isConnected) const SessionTabBar(),
+            // Main content area
             Expanded(
-              child: ts.blocks.isEmpty
+              child: (!isConnected || !hasSession)
                   ? _EmptyState(
                       status: ts.connectionStatus,
                       hasConfig: configState.hasConfig,
                       onSetup: () => context.go('/setup'),
                     )
-                  : ListView.builder(
-                      controller: _scrollCtrl,
-                      padding: const EdgeInsets.only(top: 8, bottom: 8),
-                      itemCount: ts.blocks.length,
-                      itemBuilder: (ctx, i) =>
-                          TerminalBlockWidget(block: ts.blocks[i]),
-                    ),
+                  : TerminalSessionView(sessionId: ts.activeSessionId),
             ),
-            // Prompt bar (always visible when connected, dim when waiting)
-            const PromptBar(),
+            // Helper bar with special keys (hidden when not connected)
+            const HelperBar(),
           ],
         ),
       ),
@@ -136,7 +108,7 @@ class _EmptyState extends StatelessWidget {
           Icons.terminal_rounded,
           cs.primary,
           'Listo',
-          'Escribe un comando para empezar',
+          'Iniciando sesión terminal...',
         ),
       SessionStatus.error => (
           Icons.error_outline_rounded,

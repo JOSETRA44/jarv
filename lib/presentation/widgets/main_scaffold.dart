@@ -8,6 +8,7 @@ import '../providers/terminal_provider.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../domain/entities/session_state.dart';
+import '../../domain/entities/terminal_block.dart';
 
 class MainScaffold extends ConsumerStatefulWidget {
   final int initialIndex;
@@ -102,19 +103,19 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
             NavigationDestination(
               icon: Badge(
                 isLabelVisible: terminalState.blocks
-                    .where((b) => b.type.name == 'command' && b.isComplete)
+                    .where((b) => b.type == TerminalBlockType.system)
                     .isNotEmpty,
                 label: Text(
                   terminalState.blocks
-                      .where((b) => b.type.name == 'command' && b.isComplete)
+                      .where((b) => b.type == TerminalBlockType.system)
                       .length
                       .toString(),
                   style: AppTextStyles.labelSmall.copyWith(fontSize: 9),
                 ),
-                child: const Icon(Icons.history_rounded),
+                child: const Icon(Icons.notifications_none_rounded),
               ),
-              selectedIcon: const Icon(Icons.history_rounded),
-              label: 'Historial',
+              selectedIcon: const Icon(Icons.notifications_rounded),
+              label: 'Logs',
             ),
             const NavigationDestination(
               icon: Icon(Icons.settings_outlined),

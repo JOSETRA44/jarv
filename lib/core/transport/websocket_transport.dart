@@ -5,16 +5,13 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../constants/app_constants.dart';
 import '../../domain/entities/connection_config.dart';
 import 'i_transport_strategy.dart';
-// AppConstants.wsMobilePath = '/ws/mobile' must be appended to the base WS URL.
 
-/// WebSocket-based transport strategy.
+/// WebSocket-based transport strategy (used for both Direct and Cloudflare).
 ///
-/// Implements ITransportStrategy over a persistent WebSocket connection with:
-/// - JWT authentication on connect
-/// - Exponential backoff reconnect (2s → 30s)
-/// - 30-second keepalive ping
-///
-/// Replaces the old JarvisWsDatasource with a clean strategy interface.
+/// Mobile reconnection strategy:
+///   - Attempt 1: immediate (recovers from 4G/5G micro-cuts, cell handoffs)
+///   - Attempt 2+: exponential backoff with ±25% jitter, capped at 15 s
+/// Keepalive: ping every 20 s to survive Cloudflare's 100 s idle timeout.
 class WebSocketTransport implements ITransportStrategy {
   WebSocketChannel? _channel;
   StreamSubscription? _sub;
@@ -23,6 +20,7 @@ class WebSocketTransport implements ITransportStrategy {
 
   final _events = StreamController<Map<String, dynamic>>.broadcast();
   final _statusController = StreamController<String>.broadcast();
+  final _rng = Random();
 
   String? _wsUrl;
   String? _token;
@@ -41,9 +39,6 @@ class WebSocketTransport implements ITransportStrategy {
 
   @override
   Future<void> connect(ConnectionConfig config, String token) async {
-    // config.wsUrl gives the base (e.g. ws://192.168.0.48:3000).
-    // We must append the mobile endpoint path, or the server closes the
-    // WebSocket immediately because "/" has no handler.
     _wsUrl = '${config.wsUrl}${AppConstants.wsMobilePath}';
     _token = token;
     _shouldReconnect = true;
@@ -75,13 +70,11 @@ class WebSocketTransport implements ITransportStrategy {
     try {
       final data = jsonDecode(raw as String) as Map<String, dynamic>;
       final type = data['type'] as String?;
-
       if (type == 'authenticated') {
         _connected = true;
         _statusController.add('connected');
       }
-      if (type == 'pong') return; // filter keepalive noise
-
+      if (type == 'pong') return;
       _events.add(data);
     } catch (_) {}
   }
@@ -103,11 +96,24 @@ class WebSocketTransport implements ITransportStrategy {
   void _scheduleReconnect() {
     if (!_shouldReconnect) return;
     _attempts++;
-    final secs = min(
-      AppConstants.reconnectInitialDelay.inSeconds * pow(2, _attempts - 1),
-      AppConstants.reconnectMaxDelay.inSeconds.toDouble(),
-    );
-    _reconnectTimer = Timer(Duration(seconds: secs.toInt()), () {
+
+    final Duration delay;
+    if (_attempts == 1) {
+      // Immediate reconnect for micro-cuts (cell tower handoff, brief 4G/5G drop).
+      delay = Duration.zero;
+    } else {
+      // Exponential backoff starting at 2 s, capped at 15 s, with ±25% jitter.
+      final base = min(
+        AppConstants.reconnectInitialDelay.inSeconds *
+            pow(2, _attempts - 2).toDouble(),
+        AppConstants.reconnectMaxDelay.inSeconds.toDouble(),
+      );
+      final jitter = base * 0.25 * (_rng.nextDouble() * 2 - 1);
+      final ms = ((base + jitter) * 1000).round().clamp(500, 15000);
+      delay = Duration(milliseconds: ms);
+    }
+
+    _reconnectTimer = Timer(delay, () {
       if (_shouldReconnect) _doConnect();
     });
   }
@@ -120,7 +126,9 @@ class WebSocketTransport implements ITransportStrategy {
   }
 
   void _sendRaw(Map<String, dynamic> data) {
-    try { _channel?.sink.add(jsonEncode(data)); } catch (_) {}
+    try {
+      _channel?.sink.add(jsonEncode(data));
+    } catch (_) {}
   }
 
   @override
@@ -142,7 +150,9 @@ class WebSocketTransport implements ITransportStrategy {
     _pingTimer = null;
     _sub?.cancel();
     _sub = null;
-    try { _channel?.sink.close(); } catch (_) {}
+    try {
+      _channel?.sink.close();
+    } catch (_) {}
     _channel = null;
   }
 

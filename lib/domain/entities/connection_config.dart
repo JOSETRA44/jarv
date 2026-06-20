@@ -8,11 +8,11 @@ extension TransportTypeExtension on TransportType {
   String get displayName {
     switch (this) {
       case TransportType.direct:
-        return 'Direct';
+        return 'Direct (LAN)';
       case TransportType.telegram:
         return 'Telegram';
       case TransportType.cloudflare:
-        return 'Cloudflare';
+        return 'Cloudflare Tunnel';
     }
   }
 
@@ -23,13 +23,18 @@ extension TransportTypeExtension on TransportType {
       case TransportType.telegram:
         return false;
       case TransportType.cloudflare:
-        return false;
+        return true;
     }
   }
 }
 
 class ConnectionConfig {
   final String baseUrl;
+
+  /// Public Cloudflare Tunnel URL. Defaults to jarvis.unicali.app.
+  /// Used automatically when transportType == cloudflare.
+  final String cloudflareUrl;
+
   final String password;
   final String? operatorId;
   final TransportType transportType;
@@ -37,50 +42,50 @@ class ConnectionConfig {
   const ConnectionConfig({
     required this.baseUrl,
     required this.password,
+    this.cloudflareUrl = 'https://jarvis.unicali.app',
     this.operatorId,
     this.transportType = TransportType.direct,
   });
 
   ConnectionConfig copyWith({
     String? baseUrl,
+    String? cloudflareUrl,
     String? password,
     String? operatorId,
     TransportType? transportType,
   }) {
     return ConnectionConfig(
       baseUrl: baseUrl ?? this.baseUrl,
+      cloudflareUrl: cloudflareUrl ?? this.cloudflareUrl,
       password: password ?? this.password,
       operatorId: operatorId ?? this.operatorId,
       transportType: transportType ?? this.transportType,
     );
   }
 
-  /// Convert http:// to ws:// for WebSocket URL
-  String get wsUrl {
-    final normalized = baseUrl.trim();
-    if (normalized.startsWith('https://')) {
-      return normalized.replaceFirst('https://', 'wss://');
-    } else if (normalized.startsWith('http://')) {
-      return normalized.replaceFirst('http://', 'ws://');
-    } else if (normalized.startsWith('ws://') || normalized.startsWith('wss://')) {
-      return normalized;
-    }
-    return 'ws://$normalized';
+  /// The base URL actually used for this transport type.
+  String get _effectiveBase =>
+      transportType == TransportType.cloudflare ? cloudflareUrl : baseUrl;
+
+  /// HTTP/HTTPS URL for REST calls (login, etc.).
+  String get httpUrl {
+    final s = _effectiveBase.trim();
+    if (s.startsWith('ws://'))  return s.replaceFirst('ws://', 'http://');
+    if (s.startsWith('wss://')) return s.replaceFirst('wss://', 'https://');
+    if (s.startsWith('http://') || s.startsWith('https://')) return s;
+    return 'http://$s';
   }
 
-  String get httpUrl {
-    final normalized = baseUrl.trim();
-    if (normalized.startsWith('ws://')) {
-      return normalized.replaceFirst('ws://', 'http://');
-    } else if (normalized.startsWith('wss://')) {
-      return normalized.replaceFirst('wss://', 'https://');
-    } else if (normalized.startsWith('http://') || normalized.startsWith('https://')) {
-      return normalized;
-    }
-    return 'http://$normalized';
+  /// WSS/WS URL for WebSocket connections.
+  String get wsUrl {
+    final s = _effectiveBase.trim();
+    if (s.startsWith('https://')) return s.replaceFirst('https://', 'wss://');
+    if (s.startsWith('http://'))  return s.replaceFirst('http://', 'ws://');
+    if (s.startsWith('ws://') || s.startsWith('wss://')) return s;
+    return 'ws://$s';
   }
 
   @override
   String toString() =>
-      'ConnectionConfig(baseUrl: $baseUrl, transport: $transportType)';
+      'ConnectionConfig(transport: $transportType, url: ${httpUrl})';
 }

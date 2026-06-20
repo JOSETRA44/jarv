@@ -16,8 +16,10 @@ class HistoryPage extends ConsumerWidget {
     final colorScheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    final commands = terminalState.blocks
-        .where((b) => b.type == TerminalBlockType.command && b.isComplete)
+    final logs = terminalState.blocks
+        .where((b) =>
+            b.type == TerminalBlockType.motd ||
+            b.type == TerminalBlockType.system)
         .toList()
         .reversed
         .toList();
@@ -27,53 +29,54 @@ class HistoryPage extends ConsumerWidget {
           isDark ? AppColors.darkBackground : AppColors.lightBackground,
       appBar: AppBar(
         title: Text(
-          'Historial',
+          'Logs',
           style: AppTextStyles.titleLarge.copyWith(
             color: colorScheme.onSurface,
           ),
         ),
         actions: [
-          if (commands.isNotEmpty)
+          if (logs.isNotEmpty)
             IconButton(
               onPressed: () => _showClearDialog(context, ref),
               icon: const Icon(Icons.delete_sweep_outlined),
-              tooltip: 'Limpiar historial',
+              tooltip: 'Limpiar logs',
             ),
         ],
       ),
-      body: commands.isEmpty
+      body: logs.isEmpty
           ? Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(
-                    Icons.history_rounded,
+                    Icons.notifications_none_rounded,
                     size: 48,
                     color: colorScheme.onSurface.withOpacity(0.15),
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    'Sin historial',
+                    'Sin eventos del sistema',
                     style: AppTextStyles.titleMedium.copyWith(
                       color: colorScheme.onSurface.withOpacity(0.3),
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Los comandos ejecutados aparecerán aquí',
+                    'Los eventos de conexión y errores aparecerán aquí',
                     style: AppTextStyles.bodySmall.copyWith(
                       color: colorScheme.onSurface.withOpacity(0.2),
                     ),
+                    textAlign: TextAlign.center,
                   ),
                 ],
               ),
             )
           : ListView.separated(
               padding: const EdgeInsets.all(12),
-              itemCount: commands.length,
+              itemCount: logs.length,
               separatorBuilder: (_, __) => const SizedBox(height: 8),
               itemBuilder: (context, index) =>
-                  _HistoryItem(block: commands[index]),
+                  _LogItem(block: logs[index]),
             ),
     );
   }
@@ -82,9 +85,8 @@ class HistoryPage extends ConsumerWidget {
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Limpiar historial'),
-        content: const Text(
-            '¿Estás seguro de que quieres borrar todos los bloques?'),
+        title: const Text('Limpiar logs'),
+        content: const Text('¿Borrar todos los eventos del sistema?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
@@ -106,143 +108,90 @@ class HistoryPage extends ConsumerWidget {
   }
 }
 
-class _HistoryItem extends StatelessWidget {
+class _LogItem extends StatelessWidget {
   final TerminalBlock block;
 
-  const _HistoryItem({required this.block});
+  const _LogItem({required this.block});
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final surface = isDark ? AppColors.darkCard : AppColors.lightCard;
-    final timeStr =
-        DateFormat('HH:mm:ss · dd MMM').format(block.startedAt);
-    final exitCode = block.exitCode ?? 0;
-    final exitOk = exitCode == 0;
-    final output = block.outputLines.join('\n');
+    final timeStr = DateFormat('HH:mm:ss · dd MMM').format(block.startedAt);
+
+    final isError = block.type == TerminalBlockType.system &&
+        (block.exitCode ?? 0) != 0;
+
+    final accentColor = block.type == TerminalBlockType.motd
+        ? (isDark ? AppColors.darkPrimary : AppColors.lightPrimary)
+        : isError
+            ? AppColors.statusError
+            : AppColors.statusConnecting;
+
+    final icon = block.type == TerminalBlockType.motd
+        ? Icons.terminal_rounded
+        : isError
+            ? Icons.error_outline_rounded
+            : Icons.info_outline_rounded;
+
+    final content = block.outputLines.join('\n');
 
     return Container(
       decoration: BoxDecoration(
         color: surface,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isDark ? AppColors.darkOutline : AppColors.lightOutline,
-        ),
+        border: Border(left: BorderSide(color: accentColor, width: 3)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Command header
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
             child: Row(
               children: [
-                Text(
-                  '>',
-                  style: AppTextStyles.monoBold.copyWith(
-                    color: colorScheme.primary,
-                    fontSize: 12,
-                  ),
-                ),
-                const SizedBox(width: 6),
+                Icon(icon, size: 14, color: accentColor),
+                const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    block.command ?? '',
-                    style: AppTextStyles.monoMedium.copyWith(
-                      color: colorScheme.primary,
+                    block.type == TerminalBlockType.motd ? 'JARVIS conectado' : 'Sistema',
+                    style: AppTextStyles.monoSmall.copyWith(
+                      color: accentColor,
+                      fontWeight: FontWeight.w600,
                     ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                const SizedBox(width: 8),
-                GestureDetector(
-                  onTap: () => _copy(context, block.command ?? ''),
-                  child: Icon(
-                    Icons.copy_rounded,
-                    size: 14,
+                Text(
+                  timeStr,
+                  style: AppTextStyles.monoTiny.copyWith(
                     color: colorScheme.onSurface.withOpacity(0.3),
                   ),
                 ),
-              ],
-            ),
-          ),
-
-          Divider(
-            height: 1,
-            color: isDark ? AppColors.darkOutline : AppColors.lightOutline,
-          ),
-
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (output.isNotEmpty) ...[
-                  Text(
-                    output,
-                    style: AppTextStyles.monoSmall.copyWith(
-                      color: colorScheme.onSurface.withOpacity(0.65),
-                      height: 1.4,
+                if (content.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: () => _copy(context, content),
+                    child: Icon(
+                      Icons.copy_rounded,
+                      size: 14,
+                      color: colorScheme.onSurface.withOpacity(0.3),
                     ),
-                    maxLines: 4,
-                    overflow: TextOverflow.ellipsis,
                   ),
-                  const SizedBox(height: 8),
                 ],
-                Row(
-                  children: [
-                    Text(
-                      timeStr,
-                      style: AppTextStyles.monoTiny.copyWith(
-                        color: colorScheme.onSurface.withOpacity(0.3),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 6, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: (exitOk
-                                ? colorScheme.secondary
-                                : colorScheme.error)
-                            .withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        'exit $exitCode',
-                        style: AppTextStyles.monoTiny.copyWith(
-                          color: exitOk
-                              ? colorScheme.secondary
-                              : colorScheme.error,
-                        ),
-                      ),
-                    ),
-                    if (block.duration != null) ...[
-                      const SizedBox(width: 6),
-                      Text(
-                        '${block.duration!.inMilliseconds}ms',
-                        style: AppTextStyles.monoTiny.copyWith(
-                          color: colorScheme.onSurface.withOpacity(0.25),
-                        ),
-                      ),
-                    ],
-                    const Spacer(),
-                    if (output.isNotEmpty)
-                      GestureDetector(
-                        onTap: () => _copy(context, output),
-                        child: Icon(
-                          Icons.copy_all_rounded,
-                          size: 14,
-                          color: colorScheme.onSurface.withOpacity(0.25),
-                        ),
-                      ),
-                  ],
-                ),
               ],
             ),
           ),
+          if (content.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+              child: Text(
+                content,
+                style: AppTextStyles.monoSmall.copyWith(
+                  color: colorScheme.onSurface.withOpacity(0.65),
+                  height: 1.4,
+                ),
+              ),
+            ),
         ],
       ),
     );
