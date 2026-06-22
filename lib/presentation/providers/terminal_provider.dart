@@ -1,16 +1,14 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:http/http.dart' as http;
 import 'package:xterm/xterm.dart';
 import '../../core/constants/app_constants.dart';
+import '../../core/auth/auth_service.dart';
 import '../../core/transport/i_transport_strategy.dart';
 import '../../core/transport/transport_factory.dart';
 import '../../domain/entities/connection_config.dart';
 import '../../domain/entities/session_state.dart';
 import '../../domain/entities/terminal_block.dart';
 import '../../domain/entities/session_tab.dart';
-import '../../core/services/device_id_service.dart';
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -60,6 +58,7 @@ class TerminalState {
 
 class TerminalNotifier extends StateNotifier<TerminalState> {
   ITransportStrategy _transport;
+  final AuthService _auth;
   StreamSubscription? _eventSub;
   StreamSubscription? _statusSub;
   Timer? _autoRetryTimer;
@@ -73,7 +72,7 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
   final _serverEvents = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get serverEvents => _serverEvents.stream;
 
-  TerminalNotifier(this._transport) : super(const TerminalState()) {
+  TerminalNotifier(this._transport, this._auth) : super(const TerminalState()) {
     _subscribe();
   }
 
@@ -292,6 +291,17 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
 
   void _onServerError(Map<String, dynamic> data) {
     final msg = data['message'] as String? ?? 'Error desconocido';
+    // The WS rejected our JWT — drop the cached token and re-auth ONCE via a
+    // clean reconnect (getToken will mint a fresh token, single-flighted).
+    if (msg.contains('Token') &&
+        (msg.contains('inválido') || msg.contains('expirado'))) {
+      _auth.invalidate();
+      final cfg = _config;
+      _transport.disconnect();
+      state = state.copyWith(connectionStatus: SessionStatus.disconnected);
+      if (cfg != null) Future.microtask(() => connectWithConfig(cfg));
+      return;
+    }
     _addSystemBlock(msg, isError: true);
   }
 
@@ -317,8 +327,16 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
     _config = config;
 
     try {
-      final token = await _authenticate(config);
+      final token = await _auth.getToken(config);
       await _transport.connect(config, token);
+    } on AuthRateLimitedException catch (e) {
+      // Honor the server cooldown instead of hammering the login endpoint.
+      state = state.copyWith(connectionStatus: SessionStatus.error);
+      _addSystemBlock(
+        'Límite de seguridad — reintentando en ${e.retryAfter.inSeconds}s',
+        isError: true,
+      );
+      _scheduleAutoRetry(config, delay: e.retryAfter);
     } catch (e) {
       state = state.copyWith(connectionStatus: SessionStatus.error);
       _addSystemBlock('Error de conexión: $e', isError: true);
@@ -426,9 +444,9 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
     state = state.copyWith(blocks: _trim([...state.blocks, block]));
   }
 
-  void _scheduleAutoRetry(ConnectionConfig config) {
+  void _scheduleAutoRetry(ConnectionConfig config, {Duration? delay}) {
     _autoRetryTimer?.cancel();
-    _autoRetryTimer = Timer(AppConstants.autoRetryDelay, () {
+    _autoRetryTimer = Timer(delay ?? AppConstants.autoRetryDelay, () {
       if (!state.connectionStatus.isConnected &&
           !state.connectionStatus.isConnecting) {
         connectWithConfig(config);
@@ -464,36 +482,10 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
   }
 }
 
-// ── Auth helper (standalone HTTP call) ───────────────────────────────────────
-
-Future<String> _authenticate(ConnectionConfig config) async {
-  final deviceId = await DeviceIdService.get();
-  final url = Uri.parse('${config.httpUrl}${AppConstants.loginPath}');
-  final response = await http
-      .post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'password': config.password, 'deviceId': deviceId}),
-      )
-      .timeout(AppConstants.requestTimeout);
-
-  if (response.statusCode == 200) {
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-    final token = data['token'] as String?;
-    if (token == null || token.isEmpty) throw Exception('Token vacío del servidor');
-    return token;
-  } else if (response.statusCode == 401) {
-    throw Exception('Credenciales incorrectas o dispositivo no autorizado');
-  } else if (response.statusCode == 429) {
-    throw Exception('Demasiados intentos. Espera 15 minutos.');
-  }
-  throw Exception('Error del servidor: ${response.statusCode}');
-}
-
 // ── Provider ──────────────────────────────────────────────────────────────────
 
 final terminalProvider =
     StateNotifierProvider<TerminalNotifier, TerminalState>((ref) {
   final transport = createTransport(TransportType.direct);
-  return TerminalNotifier(transport);
+  return TerminalNotifier(transport, ref.read(authServiceProvider));
 });

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -37,6 +38,8 @@ class JarvisApp extends ConsumerStatefulWidget {
 
 class _JarvisAppState extends ConsumerState<JarvisApp>
     with WidgetsBindingObserver {
+  Timer? _resumeDebounce;
+
   @override
   void initState() {
     super.initState();
@@ -47,6 +50,7 @@ class _JarvisAppState extends ConsumerState<JarvisApp>
 
   @override
   void dispose() {
+    _resumeDebounce?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -55,9 +59,18 @@ class _JarvisAppState extends ConsumerState<JarvisApp>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     ref.read(appLifecycleProvider.notifier).state = state;
     if (state == AppLifecycleState.resumed) {
-      // Silent, immediate reconnect — the server re-attaches our sessions.
-      ref.read(terminalProvider.notifier).onResume();
-      ref.read(poltergeistProvider.notifier).onResume();
+      // Debounce: Android can fire several resumed transitions in a row.
+      // Collapsing them avoids redundant reconnect passes. The shared
+      // AuthService single-flights the login, so even a missed debounce
+      // can't produce duplicate POST /api/auth/login bursts.
+      _resumeDebounce?.cancel();
+      _resumeDebounce = Timer(const Duration(milliseconds: 500), () {
+        ref.read(terminalProvider.notifier).onResume();
+        // Stagger the second module so the two WS handshakes don't race.
+        Future.delayed(const Duration(milliseconds: 300), () {
+          ref.read(poltergeistProvider.notifier).onResume();
+        });
+      });
     }
   }
 

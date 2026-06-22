@@ -3,10 +3,9 @@ import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
+import '../../core/auth/auth_service.dart';
 import '../../core/constants/app_constants.dart';
-import '../../core/services/device_id_service.dart';
 import '../../domain/entities/connection_config.dart';
 import '../../domain/entities/gui_action.dart';
 import '../../domain/entities/session_state.dart';
@@ -83,8 +82,9 @@ class PoltergeistState {
 // ── Notifier ──────────────────────────────────────────────────────────────────
 
 class PoltergeistNotifier extends StateNotifier<PoltergeistState> {
-  PoltergeistNotifier() : super(const PoltergeistState());
+  PoltergeistNotifier(this._auth) : super(const PoltergeistState());
 
+  final AuthService _auth;
   WebSocketChannel? _channel;
   StreamSubscription? _sub;
   Timer? _pingTimer;
@@ -113,8 +113,14 @@ class PoltergeistNotifier extends StateNotifier<PoltergeistState> {
         connectionStatus: SessionStatus.connecting, errorMessage: null);
 
     try {
-      _token = await _authenticate(config);
+      _token = await _auth.getToken(config);
       await _doConnect();
+    } on AuthRateLimitedException catch (e) {
+      state = state.copyWith(
+        connectionStatus: SessionStatus.error,
+        errorMessage: 'Límite de seguridad — reintentando en ${e.retryAfter.inSeconds}s',
+      );
+      _scheduleReconnect();
     } catch (e) {
       state = state.copyWith(
         connectionStatus: SessionStatus.error,
@@ -242,10 +248,14 @@ class PoltergeistNotifier extends StateNotifier<PoltergeistState> {
           _onActionResult(data);
 
         case 'error':
-          state = state.copyWith(
-            isExecuting: false,
-            errorMessage: data['message'] as String?,
-          );
+          final msg = data['message'] as String?;
+          // WS rejected our JWT → drop it so the next reconnect refreshes once.
+          if (msg != null &&
+              msg.contains('Token') &&
+              (msg.contains('inválido') || msg.contains('expirado'))) {
+            _auth.invalidate();
+          }
+          state = state.copyWith(isExecuting: false, errorMessage: msg);
 
         case 'pong':
           break;
@@ -313,7 +323,7 @@ class PoltergeistNotifier extends StateNotifier<PoltergeistState> {
   void _scheduleReconnect() {
     if (!_shouldReconnect || _config == null) return;
     _attempts++;
-    final Duration delay;
+    Duration delay;
     if (_attempts == 1) {
       delay = Duration.zero;
     } else {
@@ -322,10 +332,15 @@ class PoltergeistNotifier extends StateNotifier<PoltergeistState> {
       final ms = ((base + jitter) * 1000).round().clamp(500, 15000);
       delay = Duration(milliseconds: ms);
     }
+    // During an auth cooldown (429), wait it out instead of retrying early.
+    final cd = _auth.cooldownRemaining;
+    if (cd != null && cd > delay) delay = cd;
+
     _reconnectTimer = Timer(delay, () async {
       if (!_shouldReconnect || _config == null) return;
       try {
-        _token = await _authenticate(_config!);
+        // Reuses the cached token — no login POST in the normal reconnect path.
+        _token = await _auth.getToken(_config!);
         await _doConnect();
       } catch (_) {
         _scheduleReconnect();
@@ -366,35 +381,9 @@ class PoltergeistNotifier extends StateNotifier<PoltergeistState> {
   }
 }
 
-// ── Auth (same flow as terminal_provider) ─────────────────────────────────────
-
-Future<String> _authenticate(ConnectionConfig config) async {
-  final deviceId = await DeviceIdService.get();
-  final url = Uri.parse('${config.httpUrl}${AppConstants.loginPath}');
-  final response = await http
-      .post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'password': config.password, 'deviceId': deviceId}),
-      )
-      .timeout(AppConstants.requestTimeout);
-
-  if (response.statusCode == 200) {
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-    final token = data['token'] as String?;
-    if (token == null || token.isEmpty) throw Exception('Token vacío');
-    return token;
-  } else if (response.statusCode == 401) {
-    throw Exception('Credenciales incorrectas o dispositivo no autorizado');
-  } else if (response.statusCode == 429) {
-    throw Exception('Demasiados intentos. Espera 15 minutos.');
-  }
-  throw Exception('Error del servidor: ${response.statusCode}');
-}
-
 // ── Provider ──────────────────────────────────────────────────────────────────
 
 final poltergeistProvider =
     StateNotifierProvider<PoltergeistNotifier, PoltergeistState>(
-  (ref) => PoltergeistNotifier(),
+  (ref) => PoltergeistNotifier(ref.read(authServiceProvider)),
 );
